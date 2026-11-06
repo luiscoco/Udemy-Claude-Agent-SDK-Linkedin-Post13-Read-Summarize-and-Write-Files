@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+test-workspace-*/
+.env
+sample_project/summary.md
