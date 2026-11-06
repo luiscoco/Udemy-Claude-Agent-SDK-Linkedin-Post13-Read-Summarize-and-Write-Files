@@ -25,6 +25,27 @@ from claude_agent_sdk import (
 SAMPLE_PROJECT = Path(__file__).resolve().parent / "sample_project"
 
 
+def stage(number, title, explanation):
+    """Keep the teaching transcript readable in plain terminals and recordings."""
+    print(f"\n{'=' * 72}\n{number}. {title}\n{'-' * 72}", flush=True)
+    print(explanation, flush=True)
+
+
+def detail(label, value):
+    lines = str(value).splitlines() or [""]
+    print(f"  {label}: {lines[0]}", flush=True)
+    for line in lines[1:]:
+        print(f"    {line}", flush=True)
+
+
+def show_task(source, output, overwrite):
+    stage(1, "PREPARE THE TASK | Python application",
+          "Python validates the source and decides whether the destination may be replaced.")
+    detail("Source evidence", source)
+    detail("Summary destination", output)
+    detail("Existing output policy", "replace the entire file" if overwrite else "refuse replacement")
+
+
 class LessonError(Exception):
     """The task did not satisfy the application's completion checks."""
 
@@ -112,9 +133,20 @@ async def run_workflow(project_dir: Path, overwrite=False, max_turns=6, model=No
     source, output = prepare_workspace(project_dir, overwrite)
     before = snapshot(project_dir, output)
     options = make_options(project_dir, max_turns, model)
+    show_task(source, output, overwrite)
+    stage(2, "CONFIGURE THE AGENT | Python application",
+          "Python describes the task; Claude chooses tool calls; the SDK executes them.")
+    detail("Available tools", "Read, Write")
+    detail("Summary requirements", "README facts only; '# Project Summary' heading; at most 150 words")
+    detail("Turn limit", max_turns)
+    detail("Model", model or "SDK default")
+    stage(3, "OBSERVE THE TOOL LOOP | Claude + SDK",
+          "A request shows intent. A tool result reports execution feedback.")
+    print("Waiting for Claude...", flush=True)
     result = None
     observed_tools = set()
     requests = {}
+    event = 0
     try:
         async for message in query(prompt=make_prompt(source, output), options=options):
             if isinstance(message, AssistantMessage):
@@ -122,25 +154,44 @@ async def run_workflow(project_dir: Path, overwrite=False, max_turns=6, model=No
                     raise LessonError(f"Assistant error: {message.error}")
                 for block in message.content:
                     if isinstance(block, TextBlock):
-                        print("[CLAUDE]", block.text)
+                        print("\n[CLAUDE MESSAGE]", flush=True)
+                        detail("Text", block.text)
                     elif isinstance(block, ToolUseBlock):
                         requests[block.id] = block.name
                         observed_tools.add(block.name)
-                        print(f"[TOOL REQUEST] {block.name}: {block.input.get('file_path', '')}")
+                        event += 1
+                        print(f"\n[EVENT {event:02d}] TOOL REQUEST | Claude -> SDK", flush=True)
+                        detail("Tool", block.name)
+                        detail("File", block.input.get("file_path", "(not supplied)"))
+                        if block.name == "Read":
+                            detail("Concept", "Obtain source evidence before generating the summary.")
+                        elif block.name == "Write":
+                            detail("Concept", "Save complete generated content to the destination file.")
             elif isinstance(message, UserMessage) and isinstance(message.content, list):
                 for block in message.content:
                     if isinstance(block, ToolResultBlock):
                         status = "ERROR" if block.is_error else "OK"
-                        print(f"[TOOL RESULT] {requests.get(block.tool_use_id, block.tool_use_id)}: {status}")
+                        event += 1
+                        print(f"\n[EVENT {event:02d}] TOOL RESULT | SDK -> Claude", flush=True)
+                        detail("Tool", requests.get(block.tool_use_id, block.tool_use_id))
+                        detail("Feedback", status)
+                        if block.is_error:
+                            detail("Error details", block.content or "No details returned.")
             elif isinstance(message, ResultMessage):
                 result = message
-                print(f"[RUN] {message.subtype}; error={message.is_error}; turns={message.num_turns}")
+                print("\n[SDK RUN RESULT]", flush=True)
+                detail("Status", message.subtype)
+                detail("Reported error", message.is_error)
+                detail("Agent turns", message.num_turns)
     finally:
         # Run this check even if streaming raises an SDK exception.
+        stage(4, "VERIFY THE SAVED WORK | Python application",
+              "Python checks the workspace and saved artifact independently of Claude's messages.")
         after = snapshot(project_dir, output)
         changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
         if changed:
             raise LessonError("Unexpected workspace changes: " + ", ".join(changed))
+        detail("PASS", "Other sample workspace file contents are unchanged.")
 
     if result is None:
         raise LessonError("The run ended without a ResultMessage; completion is unconfirmed.")
@@ -149,9 +200,14 @@ async def run_workflow(project_dir: Path, overwrite=False, max_turns=6, model=No
     if not {"Read", "Write"}.issubset(observed_tools):
         raise LessonError("The expected Read and Write requests were not both observed.")
     text = verify_output(output)
-    print(f"[VERIFIED] {output}: nonempty Markdown, within 150 words; other workspace files unchanged.")
-    print("[REVIEW] Compare the summary with README.md to check factual accuracy.")
-    print("\n" + text)
+    detail("PASS", "SDK reported success and Read + Write requests were observed.")
+    detail("PASS", "Saved file is nonempty Markdown with the required heading and body.")
+    detail("Word count (including heading)", f"{len(text.split())} / 150")
+    stage(5, "REVIEW THE SUMMARY | Student",
+          "The structural checks passed. Compare each claim below with README.md for factual accuracy.")
+    detail("Saved file", output)
+    print(f"\n--- BEGIN SAVED SUMMARY ---\n{text.rstrip()}\n--- END SAVED SUMMARY ---", flush=True)
+    print("\n[COMPLETE] Summary saved and application checks passed. Factual review remains with you.", flush=True)
     return text
 
 
@@ -172,18 +228,20 @@ def main():
     try:
         source, output = prepare_workspace(SAMPLE_PROJECT, args.overwrite)
         if args.check:
+            show_task(source, output, args.overwrite)
             snapshot(SAMPLE_PROJECT, output)
-            print(f"Source: {source}\nDestination: {output}")
-            print(f"Existing output policy: {'replace' if args.overwrite else 'refuse replacement'}")
-            print("Local preflight passed. No API request was made; authentication was not tested.")
+            print("\n[LOCAL CHECK PASSED] Source, destination policy, and workspace are valid.", flush=True)
+            print("Next: run without --check to let Claude read and summarize the README.", flush=True)
+            print("No API request was made; authentication was not tested.", flush=True)
             return 0
         if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
             raise LessonError("Set ANTHROPIC_API_KEY before running. See Readme.md for setup.")
         asyncio.run(run_workflow(SAMPLE_PROJECT, args.overwrite, args.max_turns, args.model))
         return 0
     except (LessonError, ClaudeSDKError, OSError, UnicodeError) as exc:
-        print(f"[INCOMPLETE] {exc}", file=sys.stderr)
-        print("Inspect any output before retrying. Existing or partial output is not proof of success.", file=sys.stderr)
+        print(f"\n[INCOMPLETE] The application could not confirm completion.\n  Reason: {exc}", file=sys.stderr)
+        print("  Next: inspect any output and resolve the reason before retrying.\n"
+              "  Existing or partial output is not proof of success.", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("\n[INCOMPLETE] Interrupted. Inspect any partial output before retrying.", file=sys.stderr)

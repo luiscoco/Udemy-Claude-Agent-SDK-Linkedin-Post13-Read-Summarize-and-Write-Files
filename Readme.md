@@ -133,14 +133,65 @@ sample_project/summary.md
 Illustrative console output (wording, calls, and turn count vary):
 
 ```text
-[TOOL REQUEST] Read: .../sample_project/README.md
-[TOOL RESULT] Read: OK
-[TOOL REQUEST] Write: .../sample_project/summary.md
-[TOOL RESULT] Write: OK
-[RUN] success; error=False; turns=...
-[VERIFIED] .../summary.md: nonempty Markdown, within 150 words; other workspace files unchanged.
-[REVIEW] Compare the summary with README.md to check factual accuracy.
+========================================================================
+1. PREPARE THE TASK | Python application
+------------------------------------------------------------------------
+Python validates the source and decides whether the destination may be replaced.
+  Source evidence: .../sample_project/README.md
+  Summary destination: .../sample_project/summary.md
+  Existing output policy: refuse replacement
+
+2. CONFIGURE THE AGENT | Python application
+  Available tools: Read, Write
+  Summary requirements: README facts only; '# Project Summary' heading; at most 150 words
+  Turn limit: 6
+  Model: SDK default
+
+3. OBSERVE THE TOOL LOOP | Claude + SDK
+A request shows intent. A tool result reports execution feedback.
+Waiting for Claude...
+
+[EVENT 01] TOOL REQUEST | Claude -> SDK
+  Tool: Read
+  File: .../sample_project/README.md
+  Concept: Obtain source evidence before generating the summary.
+
+[EVENT 02] TOOL RESULT | SDK -> Claude
+  Tool: Read
+  Feedback: OK
+
+[EVENT 03] TOOL REQUEST | Claude -> SDK
+  Tool: Write
+  File: .../sample_project/summary.md
+  Concept: Save complete generated content to the destination file.
+
+[EVENT 04] TOOL RESULT | SDK -> Claude
+  Tool: Write
+  Feedback: OK
+
+[SDK RUN RESULT]
+  Status: success
+  Reported error: False
+  Agent turns: ...
+
+4. VERIFY THE SAVED WORK | Python application
+  PASS: Other sample workspace file contents are unchanged.
+  PASS: SDK reported success and Read + Write requests were observed.
+  PASS: Saved file is nonempty Markdown with the required heading and body.
+  Word count (including heading): ... / 150
+
+5. REVIEW THE SUMMARY | Student
+  Saved file: .../sample_project/summary.md
+
+--- BEGIN SAVED SUMMARY ---
+# Project Summary
+...contents read back from the saved file...
+--- END SAVED SUMMARY ---
+
+[COMPLETE] Summary saved and application checks passed. Factual review remains with you.
 ```
+
+The five stages identify who is responsible: Python prepares and verifies, Claude requests tools, the SDK executes them, and the student reviews factual accuracy. Event numbers follow the actual requests and results received; they do not prescribe a fixed tool sequence. Claude's text appears under `[CLAUDE MESSAGE]`, separately from the saved file. Output uses plain text with no additional formatting dependency, so it works in PowerShell and lesson recordings.
 
 Open both the source and output. Check that the summary describes a local command-line greeting program, its documented features, and the run command. It must not invent a web service, database, or deployment workflow.
 
